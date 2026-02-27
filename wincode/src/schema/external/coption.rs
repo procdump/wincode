@@ -81,6 +81,17 @@ impl<T> COptionMut<'_, T> {
         u32::from_le_bytes(*self.disc) == 0
     }
 
+    /// Returns `true` if the option is `Some` and the value matches the given value.
+    pub fn contains<U>(&self, x: &U) -> bool
+    where
+        T: PartialEq<U>,
+    {
+        match self.as_ref() {
+            Some(v) => v == x,
+            None => false,
+        }
+    }
+
     /// Returns a reference to the inner value if the discriminant indicates `Some`.
     pub fn as_ref(&self) -> Option<&T> {
         if self.is_some() {
@@ -99,6 +110,19 @@ impl<T> COptionMut<'_, T> {
         }
     }
 
+    /// Returns a reference to the contained value, panicking with the given message if `None`.
+    pub fn expect(&self, msg: &str) -> &T {
+        match self.as_ref() {
+            Some(v) => v,
+            None => panic!("{}", msg),
+        }
+    }
+
+    /// Returns a reference to the contained value, panicking if `None`.
+    pub fn unwrap(&self) -> &T {
+        self.expect("called `COptionMut::unwrap()` on a `None` value")
+    }
+
     /// Set the option to `Some(v)`, writing both the discriminant and value.
     pub fn set_some(&mut self, v: T) {
         *self.disc = 1u32.to_le_bytes();
@@ -108,6 +132,23 @@ impl<T> COptionMut<'_, T> {
     /// Set the option to `None`, writing just the discriminant.
     pub fn set_none(&mut self) {
         *self.disc = 0u32.to_le_bytes();
+    }
+
+    /// Inserts `v` if the option is `None`, then returns a mutable reference to the value.
+    pub fn get_or_insert(&mut self, v: T) -> &mut T {
+        if self.is_none() {
+            self.set_some(v);
+        }
+        self.value
+    }
+
+    /// Inserts a value computed by `f` if the option is `None`,
+    /// then returns a mutable reference to the value.
+    pub fn get_or_insert_with<F: FnOnce() -> T>(&mut self, f: F) -> &mut T {
+        if self.is_none() {
+            self.set_some(f());
+        }
+        self.value
     }
 }
 
@@ -209,6 +250,86 @@ mod tests {
         assert!(opt.is_none());
         // Discriminant zeroed, payload untouched.
         assert_eq!(buf, [0, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn test_coption_mut_contains() {
+        let mut buf = [1, 0, 0, 0, 0x42, 0, 0, 0];
+        let opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        assert!(opt.contains(&[0x42, 0, 0, 0]));
+        assert!(!opt.contains(&[0xFF, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_coption_mut_contains_none() {
+        let mut buf = [0u8; 8];
+        let opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        assert!(!opt.contains(&[0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_coption_mut_unwrap() {
+        let mut buf = [1, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD];
+        let opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        assert_eq!(*opt.unwrap(), [0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    #[should_panic(expected = "None")]
+    fn test_coption_mut_unwrap_none_panics() {
+        let mut buf = [0u8; 8];
+        let opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        opt.unwrap();
+    }
+
+    #[test]
+    fn test_coption_mut_as_mut_unwrap() {
+        let mut buf = [1, 0, 0, 0, 0, 0, 0, 0];
+        let mut opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        *opt.as_mut().unwrap() = [0x11, 0x22, 0x33, 0x44];
+        assert_eq!(buf, [1, 0, 0, 0, 0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn test_coption_mut_expect() {
+        let mut buf = [1, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD];
+        let opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        assert_eq!(*opt.expect("should be Some"), [0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    #[should_panic(expected = "custom msg")]
+    fn test_coption_mut_expect_none_panics() {
+        let mut buf = [0u8; 8];
+        let opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        opt.expect("custom msg");
+    }
+
+    #[test]
+    fn test_coption_mut_get_or_insert() {
+        let mut buf = [0u8; 8];
+        let mut opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        let val = opt.get_or_insert([0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(*val, [0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(buf, [1, 0, 0, 0, 0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn test_coption_mut_get_or_insert_existing() {
+        let mut buf = [1, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD];
+        let mut opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        let val = opt.get_or_insert([0x11, 0x22, 0x33, 0x44]);
+        // Existing value preserved.
+        assert_eq!(*val, [0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn test_coption_mut_get_or_insert_with() {
+        let mut buf = [0u8; 8];
+        let mut opt: COptionMut<'_, [u8; 4]> = crate::deserialize_mut(&mut buf).unwrap();
+        let val = opt.get_or_insert_with(|| [0xFF; 4]);
+        assert_eq!(*val, [0xFF; 4]);
+        assert_eq!(buf, [1, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]
