@@ -28,7 +28,7 @@ uuid = ["dep:uuid"]
 uuid-serde-compat = ["uuid"]
 bytes = ["alloc", "dep:bytes"]
 bytes-extra-platforms = ["bytes", "bytes/extra-platforms"]
-solana-option = ["dep:solana-program-option"]
+solana-option-mut = ["dep:solana-program-option"]
 
 [dependencies]
 bytes = { version = "1.11.1", optional = true, default-features = false }
