@@ -28,6 +28,7 @@ uuid = ["dep:uuid"]
 uuid-serde-compat = ["uuid"]
 bytes = ["alloc", "dep:bytes"]
 bytes-extra-platforms = ["bytes", "bytes/extra-platforms"]
+solana-option = ["dep:solana-program-option"]
 
 [dependencies]
 bytes = { version = "1.11.1", optional = true, default-features = false }
@@ -35,6 +36,7 @@ pastey = "0.2.1"
 solana-short-vec = { version = "3.2.0", default-features = false, optional = true }
 thiserror = { version = "2.0.18", default-features = false }
 wincode-derive = { path = "../wincode-derive", version = "0.4.3", optional = true }
+solana-program-option = { version = "3.0.1", optional = true, default-features = false }
 uuid = { version = "1.20.0", optional = true, default-features = false }
 
 [dev-dependencies]
@@ -43,6 +45,7 @@ proptest = { version = "1.10.0" }
 proptest-derive = "0.8.0"
 rand = { version = "0.9.2" }
 serde = { version = "1.0.227", features = ["derive", "rc"] }
+solana-program-option = { version = "3.0.1" }
 solana-short-vec = { version = "3.2.0" }
 criterion = { version = "0.7.0", features = ["html_reports"] }
 uuid = { version = "1.20.0", features = ["serde"] }

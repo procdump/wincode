@@ -52,6 +52,8 @@ use {
 
 pub mod containers;
 mod external;
+#[cfg(feature = "solana-option")]
+pub use external::COptionMut;
 mod impls;
 pub mod int_encoding;
 pub mod tag_encoding;
