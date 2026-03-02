@@ -16,9 +16,9 @@ where
     type Dst = COption<T::Dst>;
 
     const TYPE_META: TypeMeta = match T::TYPE_META {
-        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+        TypeMeta::Static { size, .. } => TypeMeta::Static {
             size: 4 + size,
-            zero_copy,
+            zero_copy: false,
         },
         TypeMeta::Dynamic => panic!("COption<T> requires fixed-size T"),
     };
@@ -49,9 +49,9 @@ where
     type Src = COption<T::Src>;
 
     const TYPE_META: TypeMeta = match T::TYPE_META {
-        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+        TypeMeta::Static { size, .. } => TypeMeta::Static {
             size: 4 + size,
-            zero_copy,
+            zero_copy: false,
         },
         TypeMeta::Dynamic => panic!("COption<T> requires fixed-size T"),
     };
@@ -198,9 +198,9 @@ where
     type Dst = COptionMut<'de, T::Dst>;
 
     const TYPE_META: TypeMeta = match T::TYPE_META {
-        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+        TypeMeta::Static { size, .. } => TypeMeta::Static {
             size: 4 + size,
-            zero_copy,
+            zero_copy: false,
         },
         TypeMeta::Dynamic => panic!("COptionMut<T> requires fixed-size T"),
     };
