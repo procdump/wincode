@@ -15,11 +15,25 @@ where
 {
     type Dst = COption<T::Dst>;
 
+    const TYPE_META: TypeMeta = match T::TYPE_META {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+            size: 4 + size,
+            zero_copy,
+        },
+        TypeMeta::Dynamic => panic!("COption<T> requires fixed-size T"),
+    };
+
     #[inline]
     fn read(mut reader: impl Reader<'de>, dst: &mut MaybeUninit<Self::Dst>) -> ReadResult<()> {
+        let TypeMeta::Static { size, .. } = T::TYPE_META else {
+            unreachable!()
+        };
         let variant = <u32 as SchemaRead<'de, C>>::get(reader.by_ref())?;
         match variant {
-            0 => dst.write(COption::None),
+            0 => {
+                reader.consume(size)?;
+                dst.write(COption::None)
+            }
             1 => dst.write(COption::Some(T::get(reader)?)),
             _ => return Err(invalid_tag_encoding(variant as usize)),
         };
@@ -34,23 +48,47 @@ where
 {
     type Src = COption<T::Src>;
 
+    const TYPE_META: TypeMeta = match T::TYPE_META {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
+            size: 4 + size,
+            zero_copy,
+        },
+        TypeMeta::Dynamic => panic!("COption<T> requires fixed-size T"),
+    };
+
     #[inline]
     #[allow(clippy::arithmetic_side_effects)]
     fn size_of(src: &Self::Src) -> WriteResult<usize> {
+        let TypeMeta::Static { size, .. } = T::TYPE_META else {
+            unreachable!()
+        };
         match src {
             COption::Some(value) => Ok(4 + T::size_of(value)?),
-            COption::None => Ok(4),
+            COption::None => Ok(4 + size),
         }
     }
 
     #[inline]
+    #[allow(clippy::arithmetic_side_effects)]
     fn write(mut writer: impl Writer, value: &Self::Src) -> WriteResult<()> {
+        let TypeMeta::Static { size, .. } = T::TYPE_META else {
+            unreachable!()
+        };
         match value {
             COption::Some(inner) => {
                 <u32 as SchemaWrite<C>>::write(writer.by_ref(), &1u32)?;
                 T::write(writer, inner)
             }
-            COption::None => <u32 as SchemaWrite<C>>::write(writer, &0u32),
+            COption::None => {
+                <u32 as SchemaWrite<C>>::write(writer.by_ref(), &0u32)?;
+                let mut remaining = size;
+                while remaining > 0 {
+                    let chunk = remaining.min(32);
+                    writer.write(&[0u8; 32][..chunk])?;
+                    remaining -= chunk;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -160,11 +198,11 @@ where
     type Dst = COptionMut<'de, T::Dst>;
 
     const TYPE_META: TypeMeta = match T::TYPE_META {
-        TypeMeta::Static { size, .. } => TypeMeta::Static {
+        TypeMeta::Static { size, zero_copy } => TypeMeta::Static {
             size: 4 + size,
-            zero_copy: false,
+            zero_copy,
         },
-        TypeMeta::Dynamic => TypeMeta::Dynamic,
+        TypeMeta::Dynamic => panic!("COptionMut<T> requires fixed-size T"),
     };
 
     #[inline]
@@ -199,8 +237,8 @@ mod tests {
     fn test_coption_roundtrip_none() {
         let value: COption<u32> = COption::None;
         let serialized = serialize(&value).unwrap();
-        // u32 disc (0), no payload
-        assert_eq!(serialized, [0, 0, 0, 0]);
+        // u32 disc (0) + u32 zero-padded value
+        assert_eq!(serialized, [0, 0, 0, 0, 0, 0, 0, 0]);
         let deserialized: COption<u32> = deserialize(&serialized).unwrap();
         assert_eq!(deserialized, COption::None);
     }
@@ -337,6 +375,76 @@ mod tests {
         let some: COption<[u8; 32]> = COption::Some([0xFF; 32]);
         let none: COption<[u8; 32]> = COption::None;
         assert_eq!(crate::serialized_size(&some).unwrap(), 4 + 32);
-        assert_eq!(crate::serialized_size(&none).unwrap(), 4);
+        assert_eq!(crate::serialized_size(&none).unwrap(), 4 + 32);
+    }
+
+    #[cfg(feature = "derive")]
+    #[test]
+    fn test_state_statemut_derive() {
+        use crate::{SchemaRead, SchemaWrite};
+
+        // Basically a copy-paste from `solana-address` with `wincode`
+        // to avoid adding a dependency
+        #[repr(transparent)]
+        #[derive(Debug, Clone, Copy, Default, PartialEq, SchemaWrite, SchemaRead)]
+        #[wincode(internal)]
+        struct Address([u8; 32]);
+
+        #[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
+        #[wincode(internal)]
+        struct State {
+            authority: COption<Address>,
+            data: u64,
+        }
+
+        #[derive(Debug, SchemaRead)]
+        #[wincode(internal)]
+        struct StateMut<'a> {
+            authority: COptionMut<'a, Address>,
+            data: u64,
+        }
+
+        // Serialize into a pre-allocated buffer (like a Solana account).
+        let mut buf = [0xaau8; 64];
+        let state = State {
+            authority: COption::None,
+            data: 0xdeadc0dedeadc0de,
+        };
+        crate::serialize_into(buf.as_mut_slice(), &state).unwrap();
+        // Fixed-size layout: 4 (disc=0) + 32 (zero-padded Address) + 8 (data) = 44 bytes.
+        assert!(
+            buf == [
+                // disc = None
+                0x00, 0x00, 0x00, 0x00, // Address zero-padded
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, // data = 0xdeadc0dedeadc0de
+                0xde, 0xc0, 0xad, 0xde, 0xde, 0xc0, 0xad, 0xde, // untouched
+                0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+                0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa
+            ]
+        );
+
+        // Deserialize mutably. Layouts now match — data is at the correct offset.
+        {
+            let mut state_mut: StateMut<'_> = crate::deserialize_mut(&mut buf).unwrap();
+            assert!(state_mut.authority.is_none());
+            assert!(state_mut.data == 0xdeadc0dedeadc0de);
+
+            state_mut.authority.set_some(Address([0xBB; 32]));
+            assert!(state_mut.authority.is_some());
+        }
+        assert!(
+            buf == [
+                // disc = Some
+                0x01, 0x00, 0x00, 0x00, // Address = [0xBB; 32]
+                0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+                0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb,
+                0xbb, 0xbb, 0xbb, 0xbb, // data preserved
+                0xde, 0xc0, 0xad, 0xde, 0xde, 0xc0, 0xad, 0xde, // untouched
+                0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+                0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa
+            ]
+        )
     }
 }
