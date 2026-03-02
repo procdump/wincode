@@ -392,8 +392,8 @@ mod tests {
 
         #[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
         #[wincode(internal)]
-        struct State {
-            authority: COption<Address>,
+        struct State<'a> {
+            authority: COption<&'a Address>,
             data: u64,
         }
 
